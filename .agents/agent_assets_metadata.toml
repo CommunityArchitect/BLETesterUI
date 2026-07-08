@@ -1,0 +1,8 @@
+uploads = []
+outputs = []
+
+[[generated]]
+id = "je0ULGPTZ_pJziZfYijz4"
+uri = "file://artifacts/mobile/assets/images/icon.png"
+type = "image"
+title = "ble tester icon"

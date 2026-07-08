@@ -1,0 +1,13 @@
+{
+  "name": "ble-peripheral",
+  "version": "1.0.0",
+  "description": "Local Expo module: BLE GATT server + peripheral advertising for Android",
+  "main": "index.ts",
+  "expo": {
+    "autolinking": {
+      "android": {
+        "sourceDir": "android"
+      }
+    }
+  }
+}
