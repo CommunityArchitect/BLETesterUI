@@ -1,7 +1,3 @@
-packages:
-  - "artifacts/*"
-  - "lib/*"
-  - "scripts"
 # ============================================================================
 # SECURITY: Minimum release age for npm packages (supply-chain attack defense)
 # ============================================================================

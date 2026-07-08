@@ -15,7 +15,8 @@ module.exports = {
   project: {
     android: {
       sourceDir: "android",
-      packageName: "com.ble5tester.app",
+      packageName: "com.ble5tester",
     },
   },
 };
+
