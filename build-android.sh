@@ -58,15 +58,15 @@ pnpm install 2>&1 | tail -5
 echo ""
 echo "▶  Running expo prebuild (generates android/ native project)..."
 cd "$MOBILE_DIR"
-NODE_ENV=development pnpm exec expo prebuild --platform android --clean
+EXPO_USE_COMMUNITY_AUTOLINKING=1 NODE_ENV=development pnpm exec expo prebuild --platform android --clean
 
 # ── 5. Gradle build ────────────────────────────────────────────────────────────
 echo ""
 echo "▶  Building APK with Gradle..."
 cd "$MOBILE_DIR/android"
 
-# EXPO_USE_COMMUNITY_AUTOLINKING=1  — tells RNGP to defer to Expo's autolinking
-#   (prevents "Could not find project.android.packageName" error)
+# EXPO_USE_COMMUNITY_AUTOLINKING=1  — must also be set here so that the Gradle
+#   tasks spawned during the build see it (belt-and-suspenders).
 # NODE_ENV=development              — required by expo-constants during the build
 EXPO_USE_COMMUNITY_AUTOLINKING=1 \
 NODE_ENV=development \
