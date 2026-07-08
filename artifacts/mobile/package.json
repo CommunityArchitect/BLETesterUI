@@ -56,7 +56,6 @@
     "zod-validation-error": "^3.4.0"
   },
   "dependencies": {
-    "ble-peripheral": "file:modules/ble-peripheral",
     "buffer": "^6.0.3",
     "expo-crypto": "^15.0.9",
     "react-native-ble-plx": "^3.5.1"

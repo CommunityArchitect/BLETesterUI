@@ -219,9 +219,6 @@ importers:
 
   artifacts/mobile:
     dependencies:
-      ble-peripheral:
-        specifier: file:modules/ble-peripheral
-        version: file:artifacts/mobile/modules/ble-peripheral
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2669,9 +2666,6 @@ packages:
   big-integer@1.6.52:
     resolution: {integrity: sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==}
     engines: {node: '>=0.6'}
-
-  ble-peripheral@file:artifacts/mobile/modules/ble-peripheral:
-    resolution: {directory: artifacts/mobile/modules/ble-peripheral, type: directory}
 
   body-parser@2.3.0:
     resolution: {integrity: sha512-2cGmJupaNgg+QUwVLAucDuWuoMZ6EX9iHDRswZ5lsNYEmwPaRknMPCLZz07yTzVq/83p4o/wzbDZbBrTvGGTIw==}
@@ -8574,8 +8568,6 @@ snapshots:
       open: 8.4.2
 
   big-integer@1.6.52: {}
-
-  ble-peripheral@file:artifacts/mobile/modules/ble-peripheral: {}
 
   body-parser@2.3.0:
     dependencies:

@@ -1,8 +1,7 @@
 import { useCallback, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { NativeModules, Platform } from "react-native";
 import * as Crypto from "expo-crypto";
 import { Buffer } from "buffer";
-import { getBlePeripheral } from "ble-peripheral";
 
 export type Role = "central" | "peripheral" | null;
 export type Status =
@@ -35,6 +34,12 @@ export const BLE_APP_NAME         = "BLE5Tester";
 export const PAYLOAD_BYTES        = 100;
 export const TARGET_MTU           = 500;
 
+// Native GATT server module — only available in a custom native build (not Expo Go)
+const BleGattServer: {
+  startServer(payloadBase64: string, hashHex: string): Promise<void>;
+  stopServer(): Promise<void>;
+} | null = Platform.OS === "android" ? (NativeModules.BleGattServer ?? null) : null;
+
 function generateRandomBytes(length: number): Uint8Array {
   const arr = new Uint8Array(length);
   for (let i = 0; i < length; i++) arr[i] = Math.floor(Math.random() * 256);
@@ -46,7 +51,7 @@ async function sha256hex(data: Uint8Array): Promise<string> {
   return Buffer.from(digest).toString("hex");
 }
 
-// ── BLE Manager (Central / native only) ──────────────────────────────────────
+// ── BLE Central manager (native only, lazy import) ───────────────────────────
 let BleManagerClass: typeof import("react-native-ble-plx").BleManager | null = null;
 let StateEnum: typeof import("react-native-ble-plx").State | null = null;
 let managerInstance: import("react-native-ble-plx").BleManager | null = null;
@@ -101,13 +106,13 @@ export function useBle() {
     }));
   }, []);
 
-  // ── BLE version check ───────────────────────────────────────────────────────
+  // ── BLE version / adapter check ─────────────────────────────────────────────
   const checkBleVersion = useCallback(async (): Promise<boolean> => {
     setStatus("checking_ble");
     log("Checking BLE adapter...");
 
     if (Platform.OS === "web") {
-      log("BLE not supported on web. Load on a physical Android device.");
+      log("BLE not supported on web. Use a physical Android device.");
       setState((s) => ({
         ...s,
         bleVersion: "Web — BLE not supported",
@@ -125,7 +130,7 @@ export function useBle() {
       const sub = manager.onStateChange((bleState) => {
         if (bleState === mod.State.PoweredOn) {
           sub.remove();
-          log("BLE adapter powered on — BLE 5.0+ (Android API 26+).");
+          log("BLE adapter on — BLE 5.0+ (Android API 26+).");
           setState((s) => ({ ...s, bleVersion: "BLE 5.0+ (Android)" }));
           resolve(true);
         } else if (
@@ -133,7 +138,7 @@ export function useBle() {
           bleState === mod.State.Unauthorized
         ) {
           sub.remove();
-          log(`BLE unavailable: ${bleState}. Check permissions & Bluetooth.`);
+          log(`BLE unavailable: ${bleState}. Check permissions and Bluetooth.`);
           setState((s) => ({
             ...s,
             bleVersion: bleState,
@@ -152,55 +157,45 @@ export function useBle() {
     });
   }, [log, setStatus]);
 
-  // ── Peripheral role ─────────────────────────────────────────────────────────
+  // ── Peripheral role ──────────────────────────────────────────────────────────
   const runAsPeripheral = useCallback(async () => {
     log("Generating 100-byte random payload...");
     const payload = generateRandomBytes(PAYLOAD_BYTES);
     const hash    = await sha256hex(payload);
-
     setState((s) => ({ ...s, sentHash: hash }));
     log(`SHA-256: ${hash}`);
 
-    const payloadBase64 = Buffer.from(payload).toString("base64");
-    const peripheral    = getBlePeripheral();
-
-    if (!peripheral) {
-      log("⚠  Native BlePeripheral module unavailable.");
-      log("   This happens in Expo Go — the module needs a native build.");
-      log("   Run build-android.sh on your Ubuntu machine to get the APK.");
+    if (!BleGattServer) {
       log("");
-      log("   GATT service config for reference:");
-      log(`   Service:        ${BLE_APP_SERVICE_UUID}`);
-      log(`   Data char:      ${BLE_DATA_CHAR_UUID}`);
-      log(`   Hash char:      ${BLE_HASH_CHAR_UUID}`);
-      log(`   Advertise name: ${BLE_APP_NAME}`);
+      log("⚠  BleGattServer native module not found.");
+      log("   This is normal in Expo Go — it requires a custom native build.");
+      log("   Run build-android.sh on Ubuntu to get the full APK with");
+      log("   GATT server support built in.");
+      log("");
+      log("   GATT config for reference:");
+      log(`   Service UUID: ${BLE_APP_SERVICE_UUID}`);
+      log(`   Advert name:  ${BLE_APP_NAME}`);
       setStatus("done");
       return;
     }
 
     setStatus("advertising");
     log("Starting GATT server...");
-    log(`Advertising as "${BLE_APP_NAME}" on service UUID:`);
-    log(`  ${BLE_APP_SERVICE_UUID}`);
+    log(`Advertising as "${BLE_APP_NAME}"`);
+    log(`Service: ${BLE_APP_SERVICE_UUID}`);
 
     try {
-      await peripheral.startServer(payloadBase64, hash);
-      log("GATT server running — Central can now connect.");
-      log("Press Stop when the Central has finished receiving.");
+      const payloadBase64 = Buffer.from(payload).toString("base64");
+      await BleGattServer.startServer(payloadBase64, hash);
+      log("✓ GATT server running — waiting for Central to connect.");
+      log("  Press Stop after the Central finishes.");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(`Failed to start server: ${msg}`);
+      log(`Failed to start GATT server: ${msg}`);
       setState((s) => ({ ...s, errorMessage: msg }));
       setStatus("error");
     }
   }, [log, setStatus]);
-
-  const stopPeripheral = useCallback(async () => {
-    const peripheral = getBlePeripheral();
-    if (peripheral) {
-      try { await peripheral.stopServer(); } catch { /* ignore */ }
-    }
-  }, []);
 
   // ── Central role ─────────────────────────────────────────────────────────────
   const runAsCentral = useCallback(async () => {
@@ -210,7 +205,7 @@ export function useBle() {
     stopRef.current = false;
     setStatus("scanning");
     log(`Scanning for "${BLE_APP_NAME}"...`);
-    log(`Service filter: ${BLE_APP_SERVICE_UUID}`);
+    log(`Service UUID: ${BLE_APP_SERVICE_UUID}`);
 
     let foundDevice: import("react-native-ble-plx").Device | null = null;
 
@@ -234,8 +229,8 @@ export function useBle() {
           if (!foundDevice) {
             manager.stopDeviceScan();
             reject(new Error(
-              `Scan timeout: no "${BLE_APP_NAME}" found after 15s.\n` +
-              "Ensure the Peripheral device is running in Peripheral mode and Play was pressed."
+              `Scan timeout (15s): "${BLE_APP_NAME}" not found.\n` +
+              "Ensure the Peripheral device pressed Play first."
             ));
           }
         }, 15000);
@@ -280,11 +275,11 @@ export function useBle() {
       const peripheralHash = hashChar.value
         ? Buffer.from(hashChar.value, "base64").toString("utf8")
         : "";
-      log(`Peripheral hash:  ${peripheralHash}`);
+      log(`Peripheral hash: ${peripheralHash}`);
 
       const localHash = await sha256hex(new Uint8Array(rawData));
       setState((s) => ({ ...s, receivedHash: localHash }));
-      log(`Local hash:       ${localHash}`);
+      log(`Local hash:      ${localHash}`);
 
       if (localHash === peripheralHash) {
         log("✓ HASH MATCH — 100 bytes transferred and verified!");
@@ -303,7 +298,7 @@ export function useBle() {
     }
   }, [log, setStatus]);
 
-  // ── Play / Stop / Reset ─────────────────────────────────────────────────────
+  // ── Play / Stop / Reset ──────────────────────────────────────────────────────
   const play = useCallback(async () => {
     setState((s) => ({
       ...s, isRunning: true, logs: [],
@@ -337,10 +332,12 @@ export function useBle() {
     }
     const manager = await getManager();
     manager?.stopDeviceScan();
-    await stopPeripheral();
+    if (BleGattServer) {
+      try { await BleGattServer.stopServer(); } catch { /* ignore */ }
+    }
     setState((s) => ({ ...s, isRunning: false, status: "idle" }));
     log("Stopped.");
-  }, [log, stopPeripheral]);
+  }, [log]);
 
   const reset = useCallback(async () => {
     await stop();
