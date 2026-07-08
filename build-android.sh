@@ -3,19 +3,17 @@
 # BLE 5.0 Tester — Local Android build script (Ubuntu / Debian)
 # =============================================================================
 # Prerequisites (install once):
-#   1. JDK 17:
-#        sudo apt install openjdk-17-jdk
-#   2. Android SDK with build tools — if you have `adb` working, you likely
-#      already have the SDK. Verify: echo $ANDROID_HOME
-#      If ANDROID_HOME is unset, export it, for example:
+#   1. JDK 17:   sudo apt install openjdk-17-jdk
+#   2. Android SDK with build tools (adb confirms the SDK is present).
+#      If ANDROID_HOME is unset:
 #        export ANDROID_HOME=$HOME/Android/Sdk
-#        export PATH=$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator
+#        export PATH=$PATH:$ANDROID_HOME/platform-tools
 #   3. pnpm (already installed per your setup)
 # =============================================================================
 set -euo pipefail
 
-MOBILE_DIR="$(cd "$(dirname "$0")/artifacts/mobile" && pwd)"
-cd "$MOBILE_DIR"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+MOBILE_DIR="$REPO_ROOT/artifacts/mobile"
 
 echo ""
 echo "╔══════════════════════════════════════════╗"
@@ -34,11 +32,10 @@ echo "✔  Java: $JAVA_VER"
 
 # ── 2. Check ANDROID_HOME ─────────────────────────────────────────────────────
 if [ -z "${ANDROID_HOME:-}" ]; then
-  # Try common Ubuntu paths
   for candidate in "$HOME/Android/Sdk" "$HOME/.android/sdk" "/opt/android-sdk"; do
     if [ -d "$candidate" ]; then
       export ANDROID_HOME="$candidate"
-      export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools/bin"
+      export PATH="$PATH:$ANDROID_HOME/platform-tools"
       break
     fi
   done
@@ -54,26 +51,35 @@ echo "✔  ANDROID_HOME: $ANDROID_HOME"
 # ── 3. Install JS dependencies ─────────────────────────────────────────────────
 echo ""
 echo "▶  Installing JS dependencies..."
-cd "$(dirname "$MOBILE_DIR")"  # workspace root
-pnpm install --frozen-lockfile 2>&1 | tail -5
-cd "$MOBILE_DIR"
+cd "$REPO_ROOT"
+pnpm install 2>&1 | tail -5
 
-# ── 4. Prebuild (generates android/ folder) ───────────────────────────────────
+# ── 4. Prebuild ────────────────────────────────────────────────────────────────
 echo ""
 echo "▶  Running expo prebuild (generates android/ native project)..."
-pnpm exec expo prebuild --platform android --clean
+cd "$MOBILE_DIR"
+NODE_ENV=development pnpm exec expo prebuild --platform android --clean
 
-# ── 5. Gradle build ──────────────────────────────────────────────────────────
+# ── 5. Gradle build ────────────────────────────────────────────────────────────
 echo ""
 echo "▶  Building APK with Gradle..."
-cd android
+cd "$MOBILE_DIR/android"
 
-# Use debug build by default (no signing required)
-./gradlew assembleDebug --no-daemon 2>&1 | tail -30
+# EXPO_USE_COMMUNITY_AUTOLINKING=1  — tells RNGP to defer to Expo's autolinking
+#   (prevents "Could not find project.android.packageName" error)
+# NODE_ENV=development              — required by expo-constants during the build
+EXPO_USE_COMMUNITY_AUTOLINKING=1 \
+NODE_ENV=development \
+  ./gradlew assembleDebug --no-daemon 2>&1 | tail -40
 
 APK="app/build/outputs/apk/debug/app-debug.apk"
 if [ ! -f "$APK" ]; then
-  echo "❌  APK not found at: $APK"
+  echo ""
+  echo "❌  APK not found at expected path: $MOBILE_DIR/android/$APK"
+  echo "   Run again with --stacktrace for a full error log:"
+  echo "   cd $MOBILE_DIR/android"
+  echo "   EXPO_USE_COMMUNITY_AUTOLINKING=1 NODE_ENV=development \\"
+  echo "     ./gradlew assembleDebug --stacktrace 2>&1 | tee /tmp/gradle.log"
   exit 1
 fi
 
@@ -83,27 +89,30 @@ echo "   Size: $(du -sh "$APK" | cut -f1)"
 
 # ── 6. Install via adb ────────────────────────────────────────────────────────
 echo ""
-echo "▶  Looking for connected Android device..."
-DEVICES=$(adb devices | grep -v "^List" | grep "device$" | wc -l)
+echo "▶  Looking for connected Android devices..."
+DEVICES=$(adb devices 2>/dev/null | grep -v "^List" | grep "device$" | wc -l)
 
 if [ "$DEVICES" -eq 0 ]; then
   echo "⚠  No Android device connected via adb."
-  echo "   Connect your device with USB debugging enabled and run:"
+  echo "   Connect with USB debugging enabled, then run:"
   echo "   adb install -r $MOBILE_DIR/android/$APK"
 else
   echo "✔  Found $DEVICES device(s). Installing APK..."
   adb install -r "$APK"
   echo ""
-  echo "✔  Installed! Look for 'BLE 5.0 Tester' on your device."
+  echo "✔  Installed! Open 'BLE 5.0 Tester' on your device."
   echo ""
-  echo "   To install on a second device:"
-  echo "   adb -s <DEVICE_SERIAL> install -r $MOBILE_DIR/android/$APK"
-  echo ""
-  echo "   List connected devices: adb devices"
+  if [ "$DEVICES" -gt 1 ]; then
+    echo "   Multiple devices detected — adb installed to all."
+  else
+    echo "   To install on a second device:"
+    echo "   adb -s <SERIAL> install -r $MOBILE_DIR/android/$APK"
+    echo "   (list serials with: adb devices)"
+  fi
 fi
 
 echo ""
 echo "════════════════════════════════════════════"
-echo " Done. Run on both test devices to start."
+echo " Done."
 echo "════════════════════════════════════════════"
 echo ""
