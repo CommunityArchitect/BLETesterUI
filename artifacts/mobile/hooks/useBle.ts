@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState } from "react";
-import { NativeModules, Platform } from "react-native";
+import { Platform } from "react-native";
 import * as Crypto from "expo-crypto";
 import { Buffer } from "buffer";
+import { getBlePeripheral, getBlePeripheralLoadError } from "@/modules/ble-peripheral";
 
 export type Role = "central" | "peripheral" | null;
 export type Status =
@@ -33,12 +34,7 @@ export const BLE_HASH_CHAR_UUID   = "12345678-1234-5678-1234-56789abcdef2";
 export const BLE_APP_NAME         = "BLE5Tester";
 export const PAYLOAD_BYTES        = 100;
 export const TARGET_MTU           = 500;
-
-// Native GATT server module — only available in a custom native build (not Expo Go)
-const BleGattServer: {
-  startServer(payloadBase64: string, hashHex: string): Promise<void>;
-  stopServer(): Promise<void>;
-} | null = Platform.OS === "android" ? (NativeModules.BleGattServer ?? null) : null;
+export const CENTRAL_SCAN_TIMEOUT_MS = 20000;
 
 function generateRandomBytes(length: number): Uint8Array {
   const arr = new Uint8Array(length);
@@ -47,7 +43,7 @@ function generateRandomBytes(length: number): Uint8Array {
 }
 
 async function sha256hex(data: Uint8Array): Promise<string> {
-  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, data);
+  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, data.slice().buffer as ArrayBuffer);
   return Buffer.from(digest).toString("hex");
 }
 
@@ -165,9 +161,13 @@ export function useBle() {
     setState((s) => ({ ...s, sentHash: hash }));
     log(`SHA-256: ${hash}`);
 
-    if (!BleGattServer) {
+    const peripheral = Platform.OS === "android" ? getBlePeripheral() : null;
+
+    if (!peripheral) {
+      const loadError = getBlePeripheralLoadError();
       log("");
-      log("⚠  BleGattServer native module not found.");
+      log("⚠  BlePeripheral native module not found.");
+      log(`   Platform: ${Platform.OS}, load error: ${loadError ?? "(none reported)"}`);
       log("   This is normal in Expo Go — it requires a custom native build.");
       log("   Run build-android.sh on Ubuntu to get the full APK with");
       log("   GATT server support built in.");
@@ -180,18 +180,22 @@ export function useBle() {
     }
 
     setStatus("advertising");
+    log("Native BlePeripheral module loaded.");
     log("Starting GATT server...");
     log(`Advertising as "${BLE_APP_NAME}"`);
     log(`Service: ${BLE_APP_SERVICE_UUID}`);
 
     try {
       const payloadBase64 = Buffer.from(payload).toString("base64");
-      await BleGattServer.startServer(payloadBase64, hash);
-      log("✓ GATT server running — waiting for Central to connect.");
+      log(`Calling native startServer() with ${payload.length}-byte payload...`);
+      await peripheral.startServer(payloadBase64, hash);
+      log("✓ GATT server running and advertising confirmed by the OS.");
+      log("  Waiting for Central to connect. Check `adb logcat -s BlePeripheral:V` for native-side detail.");
       log("  Press Stop after the Central finishes.");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(`Failed to start GATT server: ${msg}`);
+      log(`✗ Failed to start GATT server: ${msg}`);
+      log("  Check `adb logcat -s BlePeripheral:V` on this device for the native error detail.");
       setState((s) => ({ ...s, errorMessage: msg }));
       setStatus("error");
     }
@@ -204,21 +208,41 @@ export function useBle() {
 
     stopRef.current = false;
     setStatus("scanning");
-    log(`Scanning for "${BLE_APP_NAME}"...`);
-    log(`Service UUID: ${BLE_APP_SERVICE_UUID}`);
+    log(`Scanning for "${BLE_APP_NAME}" (no UUID filter — logging every device seen)...`);
+    log(`Expected service UUID: ${BLE_APP_SERVICE_UUID}`);
+    log(`Scan timeout: ${CENTRAL_SCAN_TIMEOUT_MS / 1000}s`);
 
     let foundDevice: import("react-native-ble-plx").Device | null = null;
+    const seenDeviceIds = new Set<string>();
 
     try {
       await new Promise<void>((resolve, reject) => {
+        // Scan with no service UUID filter (null) so we can log every nearby
+        // BLE broadcast — this is the only reliable way to see whether the
+        // Peripheral's advertisement is even reaching the Central at all.
         manager.startDeviceScan(
-          [BLE_APP_SERVICE_UUID],
+          null,
           { allowDuplicates: false },
           (error, device) => {
             if (stopRef.current) { manager.stopDeviceScan(); resolve(); return; }
             if (error) { manager.stopDeviceScan(); reject(new Error(error.message)); return; }
-            if (device && device.name === BLE_APP_NAME) {
-              log(`Found: ${device.name} (${device.id})`);
+            if (!device) return;
+
+            if (!seenDeviceIds.has(device.id)) {
+              seenDeviceIds.add(device.id);
+              log(
+                `  seen: name="${device.name ?? "(none)"}" id=${device.id} rssi=${device.rssi ?? "?"} ` +
+                `serviceUUIDs=${device.serviceUUIDs && device.serviceUUIDs.length ? device.serviceUUIDs.join(",") : "(none advertised)"}`
+              );
+            }
+
+            const matchesName = device.name === BLE_APP_NAME;
+            const matchesService = !!device.serviceUUIDs?.some(
+              (u) => u.toLowerCase() === BLE_APP_SERVICE_UUID.toLowerCase()
+            );
+
+            if (matchesName || matchesService) {
+              log(`Found target device: ${device.name ?? "(unnamed)"} (${device.id}) matchesName=${matchesName} matchesService=${matchesService}`);
               manager.stopDeviceScan();
               foundDevice = device;
               resolve();
@@ -229,11 +253,16 @@ export function useBle() {
           if (!foundDevice) {
             manager.stopDeviceScan();
             reject(new Error(
-              `Scan timeout (15s): "${BLE_APP_NAME}" not found.\n` +
-              "Ensure the Peripheral device pressed Play first."
+              `Scan timeout (${CENTRAL_SCAN_TIMEOUT_MS / 1000}s): "${BLE_APP_NAME}" not found.\n` +
+              `Devices seen during scan: ${seenDeviceIds.size}.\n` +
+              "Troubleshooting:\n" +
+              "  - Ensure the Peripheral device pressed Play first and shows '✓ GATT server running'.\n" +
+              "  - Ensure Bluetooth is ON and Location permission is granted on this (Central) device.\n" +
+              "  - Android requires Location services enabled for BLE scanning on many OEMs.\n" +
+              "  - Move the two devices closer together and retry."
             ));
           }
-        }, 15000);
+        }, CENTRAL_SCAN_TIMEOUT_MS);
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -332,8 +361,14 @@ export function useBle() {
     }
     const manager = await getManager();
     manager?.stopDeviceScan();
-    if (BleGattServer) {
-      try { await BleGattServer.stopServer(); } catch { /* ignore */ }
+    const peripheral = Platform.OS === "android" ? getBlePeripheral() : null;
+    if (peripheral) {
+      try {
+        await peripheral.stopServer();
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log(`Error stopping GATT server: ${msg}`);
+      }
     }
     setState((s) => ({ ...s, isRunning: false, status: "idle" }));
     log("Stopped.");
