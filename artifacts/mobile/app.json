@@ -18,7 +18,8 @@
       "infoPlist": {
         "NSBluetoothAlwaysUsageDescription": "This app uses Bluetooth to test BLE 5.0 advertisement and GATT data transfer between two devices.",
         "NSBluetoothPeripheralUsageDescription": "This app uses Bluetooth to test BLE 5.0 advertisement and GATT data transfer between two devices."
-      }
+      },
+      "bundleIdentifier": "com.ble5tester.app"
     },
     "android": {
       "package": "com.ble5tester.app",
@@ -48,7 +49,10 @@
         "react-native-ble-plx",
         {
           "isBackgroundEnabled": false,
-          "modes": ["central", "peripheral"],
+          "modes": [
+            "central",
+            "peripheral"
+          ],
           "bluetoothAlwaysPermission": "This app uses Bluetooth to test BLE 5.0 advertisement and GATT data transfer."
         }
       ]
