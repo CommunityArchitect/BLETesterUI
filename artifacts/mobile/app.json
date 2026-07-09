@@ -51,8 +51,7 @@
           "modes": ["central", "peripheral"],
           "bluetoothAlwaysPermission": "This app uses Bluetooth to test BLE 5.0 advertisement and GATT data transfer."
         }
-      ],
-      "./plugins/with-ble-peripheral"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
