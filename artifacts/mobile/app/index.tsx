@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { useBle, Role, Status } from "@/hooks/useBle";
+import { useBle, Role, Status, TestCase, TC_CONFIG } from "@/hooks/useBle";
 import { useColors } from "@/hooks/useColors";
 
 async function requestAndroidPermissions(): Promise<void> {
@@ -26,30 +26,30 @@ async function requestAndroidPermissions(): Promise<void> {
 
 function statusLabel(status: Status): string {
   switch (status) {
-    case "idle": return "Ready";
-    case "checking_ble": return "Checking BLE...";
+    case "idle":          return "Ready";
+    case "checking_ble":  return "Checking BLE...";
     case "ble_unsupported": return "BLE Unsupported";
-    case "advertising": return "Advertising...";
-    case "scanning": return "Scanning...";
-    case "connecting": return "Connecting...";
-    case "connected": return "Connected";
-    case "transferring": return "Transferring...";
-    case "done": return "Done";
-    case "error": return "Error";
-    default: return "Idle";
+    case "advertising":   return "Advertising...";
+    case "scanning":      return "Scanning...";
+    case "connecting":    return "Connecting...";
+    case "connected":     return "Connected";
+    case "transferring":  return "Transferring...";
+    case "done":          return "Done";
+    case "error":         return "Error";
+    default:              return "Idle";
   }
 }
 
 function statusColor(status: Status, colors: ReturnType<typeof useColors>): string {
   switch (status) {
-    case "done": return colors.success;
+    case "done":           return colors.success;
     case "error":
     case "ble_unsupported": return colors.destructive;
     case "advertising":
     case "scanning":
     case "connecting":
-    case "transferring": return colors.primary;
-    default: return colors.mutedForeground;
+    case "transferring":   return colors.primary;
+    default:               return colors.mutedForeground;
   }
 }
 
@@ -66,21 +66,25 @@ function HashBox({ label, hash, color }: { label: string; hash: string | null; c
   );
 }
 
+// Placeholder slots for future test cases (shown grayed out)
+const MAX_TEST_CASES = 5;
+const ACTIVE_TEST_CASES: TestCase[] = [1, 2];
+
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { state, setRole, play, stop, reset } = useBle();
+  const { state, setRole, setTestCase, play, stop, reset } = useBle();
 
   useEffect(() => {
     requestAndroidPermissions();
   }, []);
 
   const isActive = state.isRunning;
-  const canPlay = state.role !== null && !isActive;
+  const canPlay  = state.role !== null && !isActive;
 
-  const handleStop = useCallback(() => { void stop(); }, [stop]);
+  const handleStop  = useCallback(() => { void stop(); },  [stop]);
   const handleReset = useCallback(() => { void reset(); }, [reset]);
-  const handlePlay = useCallback(() => { void play(); }, [play]);
+  const handlePlay  = useCallback(() => { void play(); },  [play]);
 
   const hashesMatch =
     state.sentHash !== null &&
@@ -93,7 +97,7 @@ export default function HomeScreen() {
         styles.container,
         {
           backgroundColor: colors.background,
-          paddingTop: insets.top + (Platform.OS === "web" ? 67 : 16),
+          paddingTop:    insets.top    + (Platform.OS === "web" ? 67 : 16),
           paddingBottom: insets.bottom + (Platform.OS === "web" ? 34 : 16),
         },
       ]}
@@ -119,8 +123,8 @@ export default function HomeScreen() {
         <View style={styles.roleRow}>
           {(["peripheral", "central"] as Role[]).map((role) => {
             const isSelected = state.role === role;
-            const roleColor = role === "peripheral" ? colors.peripheral : colors.central;
-            const icon = role === "peripheral" ? "radio" : "wifi";
+            const roleColor  = role === "peripheral" ? colors.peripheral : colors.central;
+            const icon       = role === "peripheral" ? "radio" : "wifi";
             return (
               <TouchableOpacity
                 key={role ?? "none"}
@@ -136,13 +140,12 @@ export default function HomeScreen() {
                 activeOpacity={0.7}
                 disabled={isActive}
               >
-                <Feather name={icon as "radio" | "wifi"} size={20} color={isSelected ? roleColor : colors.mutedForeground} />
-                <Text
-                  style={[
-                    styles.roleLabel,
-                    { color: isSelected ? roleColor : colors.mutedForeground },
-                  ]}
-                >
+                <Feather
+                  name={icon as "radio" | "wifi"}
+                  size={20}
+                  color={isSelected ? roleColor : colors.mutedForeground}
+                />
+                <Text style={[styles.roleLabel, { color: isSelected ? roleColor : colors.mutedForeground }]}>
                   {role === "peripheral" ? "Peripheral" : "Central"}
                 </Text>
                 <Text style={[styles.roleDesc, { color: colors.mutedForeground }]}>
@@ -152,6 +155,78 @@ export default function HomeScreen() {
             );
           })}
         </View>
+      </View>
+
+      {/* Test Case Selector */}
+      <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
+        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>SELECT TEST CASE</Text>
+        <View style={styles.tcRow}>
+          {Array.from({ length: MAX_TEST_CASES }, (_, i) => {
+            const tc = (i + 1) as TestCase;
+            const isEnabled  = ACTIVE_TEST_CASES.includes(tc);
+            const isSelected = state.testCase === tc && isEnabled;
+            const cfg        = TC_CONFIG[tc as keyof typeof TC_CONFIG];
+
+            return (
+              <TouchableOpacity
+                key={tc}
+                testID={`tc-${tc}`}
+                onPress={() => isEnabled && !isActive && setTestCase(tc)}
+                disabled={!isEnabled || isActive}
+                activeOpacity={isEnabled ? 0.7 : 1}
+                style={[
+                  styles.tcButton,
+                  {
+                    backgroundColor: isSelected
+                      ? colors.primary + "22"
+                      : colors.secondary,
+                    borderColor: isSelected
+                      ? colors.primary
+                      : isEnabled
+                      ? colors.border
+                      : colors.border + "44",
+                    opacity: isEnabled ? 1 : 0.35,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tcNumber,
+                    {
+                      color: isSelected
+                        ? colors.primary
+                        : isEnabled
+                        ? colors.foreground
+                        : colors.mutedForeground,
+                    },
+                  ]}
+                >
+                  TC{tc}
+                </Text>
+                {cfg ? (
+                  <Text
+                    style={[
+                      styles.tcLabel,
+                      {
+                        color: isSelected ? colors.primary : colors.mutedForeground,
+                      },
+                    ]}
+                  >
+                    {cfg.label}
+                  </Text>
+                ) : (
+                  <Text style={[styles.tcLabel, { color: colors.mutedForeground }]}>—</Text>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {/* Description of selected TC */}
+        <Text style={[styles.tcDesc, { color: colors.mutedForeground }]}>
+          {state.testCase === 1
+            ? "TC1 · 100 bytes · READ transfer · SHA-256 integrity check"
+            : "TC2 · 100,000 bytes · NOTIFY stream · SHA-256 check · throughput measurement"}
+        </Text>
       </View>
 
       {/* Status Indicator */}
@@ -167,12 +242,7 @@ export default function HomeScreen() {
         {isActive ? (
           <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 10 }} />
         ) : (
-          <View
-            style={[
-              styles.statusDot,
-              { backgroundColor: statusColor(state.status, colors) },
-            ]}
-          />
+          <View style={[styles.statusDot, { backgroundColor: statusColor(state.status, colors) }]} />
         )}
         <Text style={[styles.statusText, { color: statusColor(state.status, colors) }]}>
           {statusLabel(state.status)}
@@ -180,23 +250,30 @@ export default function HomeScreen() {
         {state.role && (
           <Text style={[styles.roleTag, { color: colors.mutedForeground }]}>
             {state.role === "peripheral" ? "· Peripheral" : "· Central"}
+            {" · TC"}{state.testCase}
           </Text>
         )}
       </View>
 
-      {/* Hash Display */}
-      {(state.sentHash || state.receivedHash) && (
+      {/* Results: hash + throughput */}
+      {(state.sentHash || state.receivedHash || state.throughputKbps !== null) && (
         <View style={styles.hashSection}>
-          <HashBox
-            label="SENT (SHA-256)"
-            hash={state.sentHash}
-            color={colors.peripheral}
-          />
-          <HashBox
-            label="RECEIVED (SHA-256)"
-            hash={state.receivedHash}
-            color={colors.central}
-          />
+          <HashBox label="SENT (SHA-256)"     hash={state.sentHash}     color={colors.peripheral} />
+          <HashBox label="RECEIVED (SHA-256)" hash={state.receivedHash} color={colors.central} />
+
+          {/* Throughput badge (TC2 only) */}
+          {state.throughputKbps !== null && (
+            <View style={[styles.throughputBadge, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Feather name="activity" size={13} color={colors.primary} />
+              <Text style={[styles.throughputText, { color: colors.primary }]}>
+                {state.throughputKbps.toFixed(1)} kB/s
+              </Text>
+              <Text style={[styles.throughputSub, { color: colors.mutedForeground }]}>
+                ({(state.throughputKbps * 8).toFixed(0)} kbit/s)  ·  100,000 bytes
+              </Text>
+            </View>
+          )}
+
           {hashesMatch && (
             <View style={[styles.matchBadge, { backgroundColor: colors.success + "22", borderColor: colors.success }]}>
               <Feather name="check-circle" size={14} color={colors.success} />
@@ -224,11 +301,18 @@ export default function HomeScreen() {
       >
         {state.logs.length === 0 ? (
           <Text style={[styles.logEmpty, { color: colors.mutedForeground }]}>
-            Select a role and press Play to begin.
+            Select a role and test case, then press Play to begin.
           </Text>
         ) : (
           state.logs.map((line, i) => (
-            <Text key={i} style={[styles.logLine, { color: i === 0 ? colors.foreground : colors.mutedForeground }]} selectable>
+            <Text
+              key={i}
+              style={[
+                styles.logLine,
+                { color: i === 0 ? colors.foreground : colors.mutedForeground },
+              ]}
+              selectable
+            >
               {line}
             </Text>
           ))
@@ -257,7 +341,11 @@ export default function HomeScreen() {
           {isActive ? (
             <Feather name="square" size={22} color="#fff" />
           ) : (
-            <Feather name="play" size={22} color={canPlay ? colors.primaryForeground : colors.mutedForeground} />
+            <Feather
+              name="play"
+              size={22}
+              color={canPlay ? colors.primaryForeground : colors.mutedForeground}
+            />
           )}
           <Text
             style={[
@@ -298,7 +386,7 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 20,
+    marginBottom: 14,
     gap: 12,
   },
   blueIcon: {
@@ -325,14 +413,14 @@ const styles = StyleSheet.create({
   section: {
     borderRadius: 14,
     borderWidth: 1,
-    padding: 16,
-    marginBottom: 12,
+    padding: 14,
+    marginBottom: 10,
   },
   sectionLabel: {
     fontSize: 11,
     fontFamily: "Inter_600SemiBold",
     letterSpacing: 1,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   roleRow: {
     flexDirection: "row",
@@ -355,6 +443,36 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     textAlign: "center",
   },
+  // Test case selector
+  tcRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 8,
+  },
+  tcButton: {
+    flex: 1,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    alignItems: "center",
+    gap: 3,
+  },
+  tcNumber: {
+    fontSize: 13,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -0.2,
+  },
+  tcLabel: {
+    fontSize: 10,
+    fontFamily: "Inter_500Medium",
+  },
+  tcDesc: {
+    fontSize: 11,
+    fontFamily: "Inter_400Regular",
+    lineHeight: 16,
+  },
+  // Status
   statusRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -362,7 +480,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    marginBottom: 12,
+    marginBottom: 10,
     gap: 8,
   },
   statusDot: {
@@ -378,9 +496,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: "Inter_400Regular",
   },
+  // Results
   hashSection: {
-    gap: 8,
-    marginBottom: 12,
+    gap: 7,
+    marginBottom: 10,
   },
   hashBox: {
     borderRadius: 10,
@@ -398,6 +517,25 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     letterSpacing: 0.3,
   },
+  throughputBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  throughputText: {
+    fontSize: 15,
+    fontFamily: "Inter_700Bold",
+    letterSpacing: -0.3,
+  },
+  throughputSub: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    flex: 1,
+  },
   matchBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -411,6 +549,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: "Inter_500Medium",
   },
+  // Log
   logBox: {
     flex: 1,
     borderRadius: 12,
@@ -433,6 +572,7 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_400Regular",
     lineHeight: 17,
   },
+  // Actions
   actions: {
     flexDirection: "row",
     gap: 10,
