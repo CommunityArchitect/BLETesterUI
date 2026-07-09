@@ -43,7 +43,7 @@ function generateRandomBytes(length: number): Uint8Array {
 }
 
 async function sha256hex(data: Uint8Array): Promise<string> {
-  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, data.slice().buffer as ArrayBuffer);
+  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, data as unknown as ArrayBuffer);
   return Buffer.from(digest).toString("hex");
 }
 
