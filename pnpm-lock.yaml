@@ -310,6 +310,9 @@ importers:
       expo-location:
         specifier: ~19.0.8
         version: 19.0.8(expo@54.0.35)
+      expo-modules-core:
+        specifier: ~3.0.30
+        version: 3.0.30(react-native@0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       expo-router:
         specifier: ~6.0.17
         version: 6.0.24(799603b7e6d64a13bae7acf9b79bce3c)
