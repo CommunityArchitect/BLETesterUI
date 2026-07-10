@@ -105,7 +105,10 @@ class BlePeripheralModule : Module() {
                 Log.e(TAG, "streamPayload: streamCharacteristic is null, aborting")
                 return
             }
-            val chunkSize = maxOf(1, negotiatedMtu - 3)
+            // ATT spec caps a single attribute value at 512 bytes regardless of MTU
+            // (BLUETOOTH_MAX_ATTR_LEN). At high MTUs (e.g. 517) mtu-3 exceeds that cap
+            // and notifyCharacteristicChanged() throws IllegalArgumentException.
+            val chunkSize = maxOf(1, minOf(negotiatedMtu - 3, 512))
             val total = payloadBytes.size
             var offset = 0
             var chunkIndex = 0
