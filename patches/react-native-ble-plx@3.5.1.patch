@@ -50,10 +50,30 @@ index 07f0995..c6ebce8 100644
      String deviceIdentifier,
      String transactionId,
 diff --git a/android/src/main/java/com/bleplx/adapter/BleModule.java b/android/src/main/java/com/bleplx/adapter/BleModule.java
-index 44392b6..b09aedf 100755
+index 44392b6..854e73e 100755
 --- a/android/src/main/java/com/bleplx/adapter/BleModule.java
 +++ b/android/src/main/java/com/bleplx/adapter/BleModule.java
-@@ -250,6 +250,48 @@ public class BleModule extends ReactContextBaseJavaModule implements BleAdapter
+@@ -5,6 +5,8 @@ import static com.bleplx.adapter.utils.Constants.BluetoothState;
+ import android.annotation.SuppressLint;
+ import android.app.Activity;
+ import android.bluetooth.BluetoothAdapter;
++import android.bluetooth.BluetoothGatt;
++import android.bluetooth.BluetoothGattCallback;
+ import android.bluetooth.BluetoothGattCharacteristic;
+ import android.bluetooth.BluetoothGattDescriptor;
+ import android.bluetooth.BluetoothGattService;
+@@ -40,7 +42,10 @@ import com.polidea.rxandroidble2.NotificationSetupMode;
+ import com.polidea.rxandroidble2.RxBleAdapterStateObservable;
+ import com.polidea.rxandroidble2.RxBleClient;
+ import com.polidea.rxandroidble2.RxBleConnection;
++import com.polidea.rxandroidble2.RxBleCustomOperation;
+ import com.polidea.rxandroidble2.RxBleDevice;
++import com.polidea.rxandroidble2.exceptions.BleGattException;
++import com.polidea.rxandroidble2.exceptions.BleGattOperationType;
+ import com.polidea.rxandroidble2.internal.RxBleLog;
+ import com.polidea.rxandroidble2.scan.ScanFilter;
+ import com.polidea.rxandroidble2.scan.ScanSettings;
+@@ -250,6 +255,72 @@ public class BleModule extends ReactContextBaseJavaModule implements BleAdapter
      pendingTransactions.replaceSubscription(transactionId, subscription);
    }
  
@@ -78,17 +98,41 @@ index 44392b6..b09aedf 100755
 +      return;
 +    }
 +
-+    // RxAndroidBle 1.17.2's setPreferredPhy takes a raw int coding-preference
-+    // argument (matching android.bluetooth.BluetoothGatt.PHY_OPTION_*), not
-+    // the PhyOption enum introduced in later RxAndroidBle versions.
++    // RxAndroidBle 1.17.2 (the version pinned by react-native-ble-plx@3.5.1)
++    // does not expose a setPreferredPhy method on RxBleConnection at all -
++    // that API, along with the PhyOption enum, was only added in a later
++    // major version. We reach past the abstraction with a custom operation
++    // that calls the real android.bluetooth.BluetoothGatt#setPreferredPhy
++    // (API 26+, phyOptions matching BluetoothGatt.PHY_OPTION_*) directly,
++    // routed through RxAndroidBle's own operation queue so it doesn't race
++    // with other in-flight GATT operations on the same connection (Android
++    // BLE only allows one outstanding GATT operation at a time). We listen
++    // for the real onPhyUpdate native callback (also added in API 26) to
++    // know when the request actually completed.
 +    final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 +
++    final RxBleCustomOperation<Void> setPreferredPhyOp = (bluetoothGatt, rxBleGattCallback, scheduler) ->
++      Observable.create(emitter -> {
++        rxBleGattCallback.setNativeCallback(new BluetoothGattCallback() {
++          @Override
++          public void onPhyUpdate(BluetoothGatt gatt, int updatedTxPhy, int updatedRxPhy, int status) {
++            if (status == BluetoothGatt.GATT_SUCCESS) {
++              emitter.onNext((Void) null);
++              emitter.onComplete();
++            } else {
++              emitter.onError(new BleGattException(bluetoothGatt, status, BleGattOperationType.CONNECTION_PRIORITY_CHANGE));
++            }
++          }
++        });
++        bluetoothGatt.setPreferredPhy(txPhy, rxPhy, phyOptions);
++      });
++
 +    final Disposable subscription = connection
-+      .setPreferredPhy(txPhy, rxPhy, phyOptions)
++      .queue(setPreferredPhyOp)
 +      .doOnDispose(() -> {
 +        safeExecutor.error(BleErrorUtils.cancelled());
 +        pendingTransactions.removeSubscription(transactionId);
-+      }).subscribe((phyPair) -> {
++      }).subscribe((ignored) -> {
 +        safeExecutor.success(device);
 +        pendingTransactions.removeSubscription(transactionId);
 +      }, throwable -> {
