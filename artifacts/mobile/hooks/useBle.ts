@@ -292,12 +292,14 @@ export function useBle() {
     log("Connecting...");
     let conn = await (foundDevice as import("react-native-ble-plx").Device).connect();
 
-    // Request the shortest connection interval (CONNECTION_PRIORITY_HIGH=1).
-    // Default (BALANCED) uses a much longer interval, which throttles NOTIFY
-    // throughput to roughly one chunk per interval regardless of MTU/PHY.
+    // Request BALANCED connection priority (CONNECTION_PRIORITY_BALANCED=0).
+    // Android negotiates roughly a 30-50ms interval for this bucket, versus
+    // ~11.25-15ms for HIGH. Android only exposes these three coarse priority
+    // buckets (Balanced/High/LowPower) - it does not let apps pin an exact
+    // millisecond interval.
     try {
-      log("Requesting HIGH connection priority (shortest interval)...");
-      conn = await conn.requestConnectionPriority(1);
+      log("Requesting BALANCED connection priority...");
+      conn = await conn.requestConnectionPriority(0);
     } catch (e) {
       log(`requestConnectionPriority failed (continuing anyway): ${e instanceof Error ? e.message : String(e)}`);
     }
