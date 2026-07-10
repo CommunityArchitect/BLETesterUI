@@ -5,7 +5,7 @@ import { Buffer } from "buffer";
 import { getBlePeripheral, getBlePeripheralLoadError } from "@/modules/ble-peripheral";
 
 export type Role = "central" | "peripheral" | null;
-export type TestCase = 1 | 2;
+export type TestCase = 1 | 2 | 3;
 
 export type Status =
   | "idle"
@@ -43,7 +43,11 @@ export const CENTRAL_SCAN_TIMEOUT_MS = 20000;
 export const TC_CONFIG = {
   1: { label: "100 B",   payloadBytes: 100 },
   2: { label: "100 KB",  payloadBytes: 100_000 },
+  3: { label: "100 KB",  payloadBytes: 100_000 },
 } as const;
+
+// BLE PHY constants (Android BluetoothDevice.PHY_LE_*)
+const PHY_LE_2M = 2;
 
 function generateRandomBytes(length: number): Uint8Array {
   const arr = new Uint8Array(length);
@@ -209,9 +213,12 @@ export function useBle() {
       const payloadBase64 = Buffer.from(payload).toString("base64");
       await peripheral.startServer(payloadBase64, hash);
       log("✓ GATT server running and advertising confirmed by the OS.");
-      if (testCase === 2) {
-        log(`  TC2: central must subscribe to ${BLE_DATA_TC2_STREAM_UUID}`);
+      if (testCase === 2 || testCase === 3) {
+        log(`  TC${testCase}: central must subscribe to ${BLE_DATA_TC2_STREAM_UUID}`);
         log("  Streaming starts automatically on subscription.");
+        if (testCase === 3) {
+          log("  TC3: PHY is negotiated by the Central (2M PHY request); no peripheral action needed.");
+        }
       }
       log("  Press Stop after the Central finishes.");
     } catch (err: unknown) {
@@ -225,7 +232,8 @@ export function useBle() {
 
   // ── Central: scan & connect (shared between TC1 and TC2) ──────────────────
   const scanAndConnect = useCallback(async (
-    manager: import("react-native-ble-plx").BleManager
+    manager: import("react-native-ble-plx").BleManager,
+    testCase: TestCase
   ): Promise<import("react-native-ble-plx").Device | null> => {
     stopRef.current = false;
     setStatus("scanning");
@@ -284,14 +292,26 @@ export function useBle() {
     log("Connecting...");
     let conn = await (foundDevice as import("react-native-ble-plx").Device).connect();
 
-    // Request the shortest connection interval (CONNECTION_PRIORITY_HIGH=1).
-    // Default (BALANCED) uses a much longer interval, which throttles NOTIFY
-    // throughput to roughly one chunk per interval regardless of MTU/PHY.
+    // Request BALANCED connection priority (CONNECTION_PRIORITY_BALANCED=0).
+    // Android negotiates roughly a 30-50ms interval for this bucket, versus
+    // ~11.25-15ms for HIGH. Android only exposes these three coarse priority
+    // buckets (Balanced/High/LowPower) - it does not let apps pin an exact
+    // millisecond interval.
     try {
-      log("Requesting HIGH connection priority (shortest interval)...");
-      conn = await conn.requestConnectionPriority(1);
+      log("Requesting BALANCED connection priority...");
+      conn = await conn.requestConnectionPriority(0);
     } catch (e) {
       log(`requestConnectionPriority failed (continuing anyway): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    if (testCase === 3) {
+      try {
+        log("TC3: requesting LE 2M PHY (BLE 5.0 high-speed radio)...");
+        conn = await conn.requestPreferredPhy(PHY_LE_2M, PHY_LE_2M, 0);
+        log("✓ 2M PHY request sent (Android negotiates with peer; no direct readback via this API).");
+      } catch (e) {
+        log(`requestPreferredPhy failed (continuing on 1M PHY): ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
 
     log(`Connected. Requesting MTU ${TARGET_MTU}...`);
@@ -336,12 +356,13 @@ export function useBle() {
     }
   }, [log]);
 
-  // ── Central TC2: NOTIFY stream, 100 KB, timed ─────────────────────────────
-  const runAsCentralTc2 = useCallback(async (
-    conn: import("react-native-ble-plx").Device
+  // ── Central TC2/TC3: NOTIFY stream, 100 KB, timed (TC3 adds 2M PHY) ───────
+  const runAsCentralStream = useCallback(async (
+    conn: import("react-native-ble-plx").Device,
+    testCase: 2 | 3
   ) => {
-    const EXPECTED = TC_CONFIG[2].payloadBytes;
-    log(`TC2: subscribing to stream characteristic (expecting ${EXPECTED.toLocaleString()} bytes)...`);
+    const EXPECTED = TC_CONFIG[testCase].payloadBytes;
+    log(`TC${testCase}: subscribing to stream characteristic (expecting ${EXPECTED.toLocaleString()} bytes)...`);
     log(`  Stream UUID: ${BLE_DATA_TC2_STREAM_UUID}`);
 
     const chunks: Buffer[] = [];
@@ -421,13 +442,13 @@ export function useBle() {
 
     let conn: import("react-native-ble-plx").Device | null = null;
     try {
-      conn = await scanAndConnect(manager);
+      conn = await scanAndConnect(manager, testCase);
       if (!conn || stopRef.current) return;
 
       if (testCase === 1) {
         await runAsCentralTc1(conn);
       } else {
-        await runAsCentralTc2(conn);
+        await runAsCentralStream(conn, testCase);
       }
 
       await conn.cancelConnection();
@@ -439,7 +460,7 @@ export function useBle() {
       setState((s) => ({ ...s, errorMessage: msg }));
       setStatus("error");
     }
-  }, [log, setStatus, scanAndConnect, runAsCentralTc1, runAsCentralTc2]);
+  }, [log, setStatus, scanAndConnect, runAsCentralTc1, runAsCentralStream]);
 
   // ── Play / Stop / Reset ───────────────────────────────────────────────────
   const play = useCallback(async () => {

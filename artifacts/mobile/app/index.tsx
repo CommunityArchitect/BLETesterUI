@@ -68,7 +68,7 @@ function HashBox({ label, hash, color }: { label: string; hash: string | null; c
 
 // Placeholder slots for future test cases (shown grayed out)
 const MAX_TEST_CASES = 5;
-const ACTIVE_TEST_CASES: TestCase[] = [1, 2];
+const ACTIVE_TEST_CASES: TestCase[] = [1, 2, 3];
 
 export default function HomeScreen() {
   const colors = useColors();
@@ -225,7 +225,9 @@ export default function HomeScreen() {
         <Text style={[styles.tcDesc, { color: colors.mutedForeground }]}>
           {state.testCase === 1
             ? "TC1 · 100 bytes · READ transfer · SHA-256 integrity check"
-            : "TC2 · 100,000 bytes · NOTIFY stream · SHA-256 check · throughput measurement"}
+            : state.testCase === 2
+            ? "TC2 · 100,000 bytes · NOTIFY stream · SHA-256 check · throughput measurement"
+            : "TC3 · 100,000 bytes · NOTIFY stream on LE 2M PHY · SHA-256 check · throughput measurement"}
         </Text>
       </View>
 
