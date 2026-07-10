@@ -150,6 +150,11 @@ overrides:
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
   esbuild: 0.27.3
 
+patchedDependencies:
+  react-native-ble-plx@3.5.1:
+    hash: d92d0743d91c13cda540d3d9c5558b7222874a47f3e412ae5a163e6f4bc01fc3
+    path: patches/react-native-ble-plx@3.5.1.patch
+
 importers:
 
   .:
@@ -236,7 +241,7 @@ importers:
         version: 0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0)
       react-native-ble-plx:
         specifier: ^3.5.1
-        version: 3.5.1(react-native@0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+        version: 3.5.1(patch_hash=d92d0743d91c13cda540d3d9c5558b7222874a47f3e412ae5a163e6f4bc01fc3)(react-native@0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
     devDependencies:
       '@babel/core':
         specifier: ^7.25.2
@@ -4734,8 +4739,8 @@ packages:
     resolution: {integrity: sha512-ak9Qy5Q7jYb2Wwcey5Fpvg2KoAc/ZIhLSLOSBmRmygPsGwkVVt0fZa0qrtMz+m6tJTAHfZQ8FnmB4MG4LWy7/w==}
     engines: {node: '>=8'}
 
-  path-expression-matcher@1.6.1:
-    resolution: {integrity: sha512-h7bxdzhHk8Knyc4Tj+jMaa7fEEoUJy7p1qtbVgkYg1Uhpe5Np5VuGXCRZnkZvU+Q42M1vStt0ifa3ueykRJPmQ==}
+  path-expression-matcher@1.6.2:
+    resolution: {integrity: sha512-enSlaiat05iasnzmgNxRj8reFdj3puY2QpNgP1aPIaVfT6nn9ICuPoFlKHk8EN22HcwewshO+mN2DGbkCEOtqQ==}
     engines: {node: '>=14.0.0'}
 
   path-is-absolute@1.0.1:
@@ -9943,7 +9948,7 @@ snapshots:
 
   fast-xml-builder@1.2.1:
     dependencies:
-      path-expression-matcher: 1.6.1
+      path-expression-matcher: 1.6.2
       xml-naming: 0.1.0
 
   fast-xml-parser@5.9.3:
@@ -9951,7 +9956,7 @@ snapshots:
       '@nodable/entities': 2.2.0
       fast-xml-builder: 1.2.1
       is-unsafe: 1.0.1
-      path-expression-matcher: 1.6.1
+      path-expression-matcher: 1.6.2
       strnum: 2.4.1
       xml-naming: 0.1.0
 
@@ -11209,7 +11214,7 @@ snapshots:
 
   path-exists@4.0.0: {}
 
-  path-expression-matcher@1.6.1: {}
+  path-expression-matcher@1.6.2: {}
 
   path-is-absolute@1.0.1: {}
 
@@ -11481,7 +11486,7 @@ snapshots:
 
   react-is@19.2.7: {}
 
-  react-native-ble-plx@3.5.1(react-native@0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+  react-native-ble-plx@3.5.1(patch_hash=d92d0743d91c13cda540d3d9c5558b7222874a47f3e412ae5a163e6f4bc01fc3)(react-native@0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
     dependencies:
       react: 19.1.0
       react-native: 0.81.5(@babel/core@7.29.7)(@react-native-community/cli@20.2.0(typescript@5.9.3))(@types/react@19.1.17)(react@19.1.0)

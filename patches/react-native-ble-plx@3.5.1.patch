@@ -1,0 +1,264 @@
+diff --git a/android/src/main/java/com/bleplx/BlePlxModule.java b/android/src/main/java/com/bleplx/BlePlxModule.java
+index d4ef9c5..e01b3bf 100644
+--- a/android/src/main/java/com/bleplx/BlePlxModule.java
++++ b/android/src/main/java/com/bleplx/BlePlxModule.java
+@@ -324,6 +324,26 @@ public class BlePlxModule extends ReactContextBaseJavaModule {
+       });
+   }
+ 
++  @ReactMethod
++  public void requestPreferredPhyForDevice(final String deviceId, int txPhy, int rxPhy, int phyOptions, final String transactionId, final Promise promise) {
++    if (!this.isRequestPossibleHandler("requestPreferredPhyForDevice", promise)) {
++      return;
++    }
++    final SafePromise safePromise = new SafePromise(promise);
++    bleAdapter.requestPreferredPhyForDevice(deviceId, txPhy, rxPhy, phyOptions, transactionId,
++      new OnSuccessCallback<Device>() {
++        @Override
++        public void onSuccess(Device data) {
++          safePromise.resolve(deviceConverter.toJSObject(data));
++        }
++      }, new OnErrorCallback() {
++        @Override
++        public void onError(BleError error) {
++          safePromise.reject(getErrorCode(error), errorConverter.toJs(error));
++        }
++      });
++  }
++
+   @ReactMethod
+   public void requestMTUForDevice(final String deviceId, int mtu, final String transactionId, final Promise promise) {
+     if (!this.isRequestPossibleHandler("requestMTUForDevice", promise)) {
+diff --git a/android/src/main/java/com/bleplx/adapter/BleAdapter.java b/android/src/main/java/com/bleplx/adapter/BleAdapter.java
+index 07f0995..c6ebce8 100644
+--- a/android/src/main/java/com/bleplx/adapter/BleAdapter.java
++++ b/android/src/main/java/com/bleplx/adapter/BleAdapter.java
+@@ -41,6 +41,15 @@ public interface BleAdapter {
+     OnSuccessCallback<Device> onSuccessCallback,
+     OnErrorCallback onErrorCallback);
+ 
++  void requestPreferredPhyForDevice(
++    String deviceIdentifier,
++    int txPhy,
++    int rxPhy,
++    int phyOptions,
++    String transactionId,
++    OnSuccessCallback<Device> onSuccessCallback,
++    OnErrorCallback onErrorCallback);
++
+   void readRSSIForDevice(
+     String deviceIdentifier,
+     String transactionId,
+diff --git a/android/src/main/java/com/bleplx/adapter/BleModule.java b/android/src/main/java/com/bleplx/adapter/BleModule.java
+index 44392b6..84949b1 100755
+--- a/android/src/main/java/com/bleplx/adapter/BleModule.java
++++ b/android/src/main/java/com/bleplx/adapter/BleModule.java
+@@ -250,6 +250,58 @@ public class BleModule extends ReactContextBaseJavaModule implements BleAdapter
+     pendingTransactions.replaceSubscription(transactionId, subscription);
+   }
+ 
++  @Override
++  public void requestPreferredPhyForDevice(String deviceIdentifier,
++                                           int txPhy,
++                                           int rxPhy,
++                                           int phyOptions,
++                                           final String transactionId,
++                                           final OnSuccessCallback<Device> onSuccessCallback,
++                                           final OnErrorCallback onErrorCallback) {
++    final Device device;
++    try {
++      device = getDeviceById(deviceIdentifier);
++    } catch (BleError error) {
++      onErrorCallback.onError(error);
++      return;
++    }
++
++    final RxBleConnection connection = getConnectionOrEmitError(device.getId(), onErrorCallback);
++    if (connection == null) {
++      return;
++    }
++
++    final com.polidea.rxandroidble2.PhyOption phyOption;
++    switch (phyOptions) {
++      case 1:
++        phyOption = com.polidea.rxandroidble2.PhyOption.S2;
++        break;
++      case 2:
++        phyOption = com.polidea.rxandroidble2.PhyOption.S8;
++        break;
++      default:
++        phyOption = com.polidea.rxandroidble2.PhyOption.NO_PREFERRED;
++        break;
++    }
++
++    final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
++
++    final Disposable subscription = connection
++      .setPreferredPhy(txPhy, rxPhy, phyOption)
++      .doOnDispose(() -> {
++        safeExecutor.error(BleErrorUtils.cancelled());
++        pendingTransactions.removeSubscription(transactionId);
++      }).subscribe((phyPair) -> {
++        safeExecutor.success(device);
++        pendingTransactions.removeSubscription(transactionId);
++      }, throwable -> {
++        safeExecutor.error(errorConverter.toError(throwable));
++        pendingTransactions.removeSubscription(transactionId);
++      });
++
++    pendingTransactions.replaceSubscription(transactionId, subscription);
++  }
++
+   @Override
+   public void readRSSIForDevice(String deviceIdentifier,
+                                 final String transactionId,
+diff --git a/src/BleManager.js b/src/BleManager.js
+index 933dcdd..42943ce 100644
+--- a/src/BleManager.js
++++ b/src/BleManager.js
+@@ -414,6 +414,33 @@ export class BleManager {
+     return new Device(nativeDevice, this)
+   }
+ 
++  /**
++   * Requests a preferred PHY (Android only). Falls through as a no-op resolving to the
++   * connected device on platforms/OS versions that don't support PHY negotiation.
++   *
++   * @param {DeviceId} deviceIdentifier Device identifier.
++   * @param {number} txPhy Preferred transmitter PHY. One of Phy.LE_1M / Phy.LE_2M / Phy.LE_CODED.
++   * @param {number} rxPhy Preferred receiver PHY. One of Phy.LE_1M / Phy.LE_2M / Phy.LE_CODED.
++   * @param {number} phyOptions Coding preference when using LE_CODED. One of PhyOption.NoPreferred / S2 / S8.
++   * @param {?TransactionId} transactionId Transaction handle used to cancel operation.
++   * @returns {Promise<Device>} Connected device.
++   */
++  async requestPreferredPhyForDevice(
++    deviceIdentifier: DeviceId,
++    txPhy: number,
++    rxPhy: number,
++    phyOptions: number = 0,
++    transactionId: ?TransactionId
++  ): Promise<Device> {
++    if (!transactionId) {
++      transactionId = this._nextUniqueID()
++    }
++    const nativeDevice = await this._callPromise(
++      BleModule.requestPreferredPhyForDevice(deviceIdentifier, txPhy, rxPhy, phyOptions, transactionId)
++    )
++    return new Device(nativeDevice, this)
++  }
++
+   /**
+    * Reads RSSI for connected device.
+    *
+diff --git a/src/Device.js b/src/Device.js
+index 59c72be..1cf7d4b 100644
+--- a/src/Device.js
++++ b/src/Device.js
+@@ -125,6 +125,24 @@ export class Device implements NativeDevice {
+     return this._manager.requestConnectionPriorityForDevice(this.id, connectionPriority, transactionId)
+   }
+ 
++  /**
++   * {@link #blemanagerrequestpreferredphyfordevice|bleManager.requestPreferredPhyForDevice()} with partially filled arguments.
++   *
++   * @param {number} txPhy Preferred transmitter PHY.
++   * @param {number} rxPhy Preferred receiver PHY.
++   * @param {number} phyOptions Coding preference when using LE_CODED.
++   * @param {?TransactionId} transactionId Transaction handle used to cancel operation.
++   * @returns {Promise<Device>} Connected device.
++   */
++  requestPreferredPhy(
++    txPhy: number,
++    rxPhy: number,
++    phyOptions: number = 0,
++    transactionId: ?TransactionId
++  ): Promise<Device> {
++    return this._manager.requestPreferredPhyForDevice(this.id, txPhy, rxPhy, phyOptions, transactionId)
++  }
++
+   /**
+    * {@link #blemanagerreadrssifordevice|bleManager.readRSSIForDevice()} with partially filled arguments.
+    *
+diff --git a/src/index.d.ts b/src/index.d.ts
+index d1ef75c..1949dcd 100644
+--- a/src/index.d.ts
++++ b/src/index.d.ts
+@@ -295,6 +295,35 @@ declare module 'react-native-ble-plx' {
+     LowPower = 2
+   }
+ 
++  /**
++   * BLE physical layer (PHY) used for a connection (Android only).
++   * @name Phy
++   */
++  export enum Phy {
++    /**
++     * LE 1M PHY - the default, universally supported PHY (up to 1 Mbps).
++     */
++    LE1M = 1,
++    /**
++     * LE 2M PHY - BLE 5.0 high-speed PHY (up to 2 Mbps), doubling raw radio throughput vs LE1M.
++     */
++    LE2M = 2,
++    /**
++     * LE Coded PHY - long range, lower data rate.
++     */
++    LECoded = 4
++  }
++
++  /**
++   * Coding preference used only when negotiating LE Coded PHY.
++   * @name PhyOption
++   */
++  export enum PhyOption {
++    NoPreferred = 0,
++    S2 = 1,
++    S8 = 2
++  }
++
+   // Utils.js **********************************************************************************************************
+ 
+   /**
+@@ -1159,6 +1188,24 @@ declare module 'react-native-ble-plx' {
+       transactionId?: TransactionId
+     ): Promise<Device>
+ 
++    /**
++     * Requests a preferred PHY for a connected device (Android only).
++     *
++     * @param {DeviceId} deviceIdentifier Device identifier.
++     * @param {Phy} txPhy Preferred transmitter PHY.
++     * @param {Phy} rxPhy Preferred receiver PHY.
++     * @param {PhyOption} phyOptions Coding preference when using LE Coded PHY.
++     * @param {?TransactionId} transactionId Transaction handle used to cancel operation.
++     * @returns {Promise<Device>} Connected device.
++     */
++    requestPreferredPhyForDevice(
++      deviceIdentifier: DeviceId,
++      txPhy: Phy,
++      rxPhy: Phy,
++      phyOptions?: PhyOption,
++      transactionId?: TransactionId
++    ): Promise<Device>
++
+     /**
+      * Reads RSSI for connected device.
+      *
+@@ -1510,6 +1557,17 @@ declare module 'react-native-ble-plx' {
+      */
+     requestConnectionPriority(connectionPriority: ConnectionPriority, transactionId?: TransactionId): Promise<Device>
+ 
++    /**
++     * {@link #blemanagerrequestpreferredphyfordevice|bleManager.requestPreferredPhyForDevice()} with partially filled arguments.
++     *
++     * @param {Phy} txPhy Preferred transmitter PHY.
++     * @param {Phy} rxPhy Preferred receiver PHY.
++     * @param {PhyOption} phyOptions Coding preference when using LE Coded PHY.
++     * @param {?TransactionId} transactionId Transaction handle used to cancel operation.
++     * @returns {Promise<Device>} Connected device.
++     */
++    requestPreferredPhy(txPhy: Phy, rxPhy: Phy, phyOptions?: PhyOption, transactionId?: TransactionId): Promise<Device>
++
+     /**
+      * {@link #blemanagerreadrssifordevice|bleManager.readRSSIForDevice()} with partially filled arguments.
+      *
