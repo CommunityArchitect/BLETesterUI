@@ -283,6 +283,17 @@ export function useBle() {
     setStatus("connecting");
     log("Connecting...");
     let conn = await (foundDevice as import("react-native-ble-plx").Device).connect();
+
+    // Request the shortest connection interval (CONNECTION_PRIORITY_HIGH=1).
+    // Default (BALANCED) uses a much longer interval, which throttles NOTIFY
+    // throughput to roughly one chunk per interval regardless of MTU/PHY.
+    try {
+      log("Requesting HIGH connection priority (shortest interval)...");
+      conn = await conn.requestConnectionPriority(1);
+    } catch (e) {
+      log(`requestConnectionPriority failed (continuing anyway): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     log(`Connected. Requesting MTU ${TARGET_MTU}...`);
     conn = await conn.requestMTU(TARGET_MTU);
     log(`MTU negotiated: ${conn.mtu ?? "unknown"}`);
