@@ -35,7 +35,35 @@ class BlePeripheralModule : Module() {
         val CCCD_UUID: UUID            = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
         const val APP_LOCAL_NAME = "BLE5Tester"
-        private const val TAG = "BlePeripheral"
+        const val TAG = "BlePeripheral"
+
+        @Volatile private var crashLoggerInstalled = false
+
+        // Installs a process-wide uncaught exception logger exactly once. Any thread
+        // (main, binder callback thread, or our streaming daemon thread) that dies with
+        // an uncaught exception will log a clearly-tagged "FATAL" line under TAG before
+        // the previous (default) handler runs and the process actually terminates.
+        // Filter with: adb logcat -s BlePeripheral:V AndroidRuntime:E DEBUG:E
+        fun installCrashLoggerOnce() {
+            if (crashLoggerInstalled) return
+            synchronized(this) {
+                if (crashLoggerInstalled) return
+                val previous = Thread.getDefaultUncaughtExceptionHandler()
+                Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                    Log.e(
+                        TAG,
+                        "############## FATAL UNCAUGHT EXCEPTION ##############\n" +
+                        "thread=\"${thread.name}\" (id=${thread.id})\n" +
+                        "exception=${throwable.javaClass.name}: ${throwable.message}",
+                        throwable
+                    )
+                    Log.e(TAG, "############## END FATAL EXCEPTION — process will now terminate ##############")
+                    previous?.uncaughtException(thread, throwable)
+                }
+                crashLoggerInstalled = true
+                Log.i(TAG, "installCrashLoggerOnce(): global uncaught-exception logger installed")
+            }
+        }
 
         private fun advertiseFailureReason(code: Int): String = when (code) {
             AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED   -> "ADVERTISE_FAILED_ALREADY_STARTED"
@@ -45,6 +73,10 @@ class BlePeripheralModule : Module() {
             AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "ADVERTISE_FAILED_TOO_MANY_ADVERTISERS"
             else -> "UNKNOWN_ERROR($code)"
         }
+    }
+
+    init {
+        installCrashLoggerOnce()
     }
 
     private var gattServer: BluetoothGattServer? = null
@@ -62,52 +94,89 @@ class BlePeripheralModule : Module() {
     private var notifySemaphore = Semaphore(1)
 
     // ── Streaming: send payloadBytes in MTU-sized chunks via NOTIFY ──────────────
+    // Runs on a dedicated daemon thread. Wrapped in try/catch/finally so that any
+    // exception is fully logged under TAG (with thread name + stack) before it is
+    // rethrown — the global crash logger installed in the companion object will also
+    // catch it, but logging here first pinpoints exactly which offset/chunk failed.
     private fun streamPayload(device: BluetoothDevice) {
-        val streamChar = streamCharacteristic ?: run {
-            Log.e(TAG, "streamPayload: streamCharacteristic is null, aborting")
-            return
+        Log.i(TAG, "streamPayload: thread started, name=${Thread.currentThread().name}")
+        try {
+            val streamChar = streamCharacteristic ?: run {
+                Log.e(TAG, "streamPayload: streamCharacteristic is null, aborting")
+                return
+            }
+            val chunkSize = maxOf(1, negotiatedMtu - 3)
+            val total = payloadBytes.size
+            var offset = 0
+            var chunkIndex = 0
+            Log.i(TAG, "streamPayload: starting — total=$total bytes, chunkSize=$chunkSize (MTU=$negotiatedMtu) device=${device.address}")
+
+            while (offset < total && !Thread.currentThread().isInterrupted) {
+                val end = minOf(offset + chunkSize, total)
+                val chunk = payloadBytes.copyOfRange(offset, end)
+                streamChar.value = chunk
+
+                // Acquire before sending: blocks until previous notification was delivered.
+                try {
+                    notifySemaphore.acquire()
+                } catch (e: InterruptedException) {
+                    Log.d(TAG, "streamPayload interrupted during acquire at offset=$offset")
+                    break
+                }
+
+                if (gattServer == null) {
+                    Log.e(TAG, "streamPayload: gattServer became null mid-stream at offset=$offset, aborting")
+                    break
+                }
+
+                val queued = try {
+                    gattServer?.notifyCharacteristicChanged(device, streamChar, false) ?: false
+                } catch (e: Throwable) {
+                    Log.e(TAG, "streamPayload: notifyCharacteristicChanged THREW at offset=$offset chunkIndex=$chunkIndex chunkLen=${chunk.size}: ${e.javaClass.simpleName}: ${e.message}", e)
+                    throw e
+                }
+                if (!queued) {
+                    // Notification not queued (TX buffer full); return permit and retry.
+                    notifySemaphore.release()
+                    Log.d(TAG, "streamPayload: notifyCharacteristicChanged returned false at offset=$offset, retrying after 10ms")
+                    try { Thread.sleep(10) } catch (e: InterruptedException) { break }
+                    continue
+                }
+                // Only advance offset on successful queue.
+                chunkIndex++
+                if (chunkIndex % 50 == 0 || end == total || chunkIndex <= 3) {
+                    Log.d(TAG, "streamPayload: sent chunk #$chunkIndex offset=$offset/$total (${end * 100 / total}%) chunkLen=${chunk.size}")
+                }
+                offset = end
+            }
+            Log.i(TAG, "streamPayload: finished — sent $offset/$total bytes in $chunkIndex chunks")
+        } catch (t: Throwable) {
+            Log.e(TAG, "streamPayload: UNCAUGHT ${t.javaClass.name} on thread=${Thread.currentThread().name}: ${t.message}", t)
+            throw t
+        } finally {
+            Log.i(TAG, "streamPayload: thread exiting, name=${Thread.currentThread().name}")
         }
-        val chunkSize = maxOf(1, negotiatedMtu - 3)
-        val total = payloadBytes.size
-        var offset = 0
-        var chunkIndex = 0
-        Log.i(TAG, "streamPayload: starting — total=$total bytes, chunkSize=$chunkSize (MTU=$negotiatedMtu)")
-
-        while (offset < total && !Thread.currentThread().isInterrupted) {
-            val end = minOf(offset + chunkSize, total)
-            val chunk = payloadBytes.copyOfRange(offset, end)
-            streamChar.value = chunk
-
-            // Acquire before sending: blocks until previous notification was delivered.
-            try {
-                notifySemaphore.acquire()
-            } catch (e: InterruptedException) {
-                Log.d(TAG, "streamPayload interrupted during acquire at offset=$offset")
-                break
-            }
-
-            val queued = gattServer?.notifyCharacteristicChanged(device, streamChar, false) ?: false
-            if (!queued) {
-                // Notification not queued (TX buffer full); return permit and retry.
-                notifySemaphore.release()
-                Log.d(TAG, "streamPayload: notifyCharacteristicChanged returned false at offset=$offset, retrying after 10ms")
-                try { Thread.sleep(10) } catch (e: InterruptedException) { break }
-                continue
-            }
-            // Only advance offset on successful queue.
-            chunkIndex++
-            if (chunkIndex % 50 == 0 || end == total) {
-                Log.d(TAG, "streamPayload: sent chunk #$chunkIndex offset=$offset/$total (${end * 100 / total}%)")
-            }
-            offset = end
-        }
-        Log.i(TAG, "streamPayload: finished — sent $offset/$total bytes in $chunkIndex chunks")
     }
 
     // ── GATT Server Callbacks ────────────────────────────────────────────────────
+    // Every override is wrapped in try/catch(Throwable) so that any exception thrown
+    // while Android's Bluetooth stack invokes us (these run on a Binder callback
+    // thread, not our own code) is fully logged under TAG — with method name, all
+    // relevant args, and a full stack trace — before being rethrown. Without this,
+    // an exception here can otherwise surface only as a generic system-level crash
+    // with little indication of which callback or characteristic/descriptor was involved.
+    private inline fun guarded(method: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            Log.e(TAG, "CRASH in $method() on thread=${Thread.currentThread().name}: ${t.javaClass.name}: ${t.message}", t)
+            throw t
+        }
+    }
+
     private val gattServerCallback = object : BluetoothGattServerCallback() {
 
-        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
+        override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) = guarded("onConnectionStateChange") {
             Log.d(TAG, "onConnectionStateChange: device=${device.address} status=$status newState=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
@@ -123,12 +192,12 @@ class BlePeripheralModule : Module() {
             }
         }
 
-        override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
+        override fun onMtuChanged(device: BluetoothDevice, mtu: Int) = guarded("onMtuChanged") {
             Log.i(TAG, "onMtuChanged: device=${device.address} mtu=$mtu")
             negotiatedMtu = mtu
         }
 
-        override fun onNotificationSent(device: BluetoothDevice, status: Int) {
+        override fun onNotificationSent(device: BluetoothDevice, status: Int) = guarded("onNotificationSent") {
             Log.d(TAG, "onNotificationSent: device=${device.address} status=$status")
             // Release permit so the streaming thread can send the next chunk.
             notifySemaphore.release()
@@ -139,7 +208,7 @@ class BlePeripheralModule : Module() {
             requestId: Int,
             offset: Int,
             characteristic: BluetoothGattCharacteristic
-        ) {
+        ) = guarded("onCharacteristicReadRequest") {
             Log.d(TAG, "onCharacteristicReadRequest: device=${device.address} uuid=${characteristic.uuid} offset=$offset")
             when (characteristic.uuid) {
                 DATA_CHAR_UUID -> {
@@ -171,8 +240,8 @@ class BlePeripheralModule : Module() {
             responseNeeded: Boolean,
             offset: Int,
             value: ByteArray?
-        ) {
-            Log.d(TAG, "onDescriptorWriteRequest: device=${device.address} descriptor=${descriptor.uuid} value=${value?.contentToString()}")
+        ) = guarded("onDescriptorWriteRequest") {
+            Log.d(TAG, "onDescriptorWriteRequest: device=${device.address} descriptor=${descriptor.uuid} char=${descriptor.characteristic?.uuid} value=${value?.contentToString()} preparedWrite=$preparedWrite responseNeeded=$responseNeeded")
             if (responseNeeded) {
                 gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
             }
@@ -180,12 +249,16 @@ class BlePeripheralModule : Module() {
                 value != null &&
                 value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
             ) {
-                Log.i(TAG, "Central enabled notifications for ${descriptor.characteristic.uuid} — starting stream to ${device.address}")
+                Log.i(TAG, "Central enabled notifications for ${descriptor.characteristic?.uuid} — starting stream to ${device.address}")
                 // Reset semaphore to exactly 1 permit for fresh streaming session.
                 notifySemaphore.drainPermits()
                 notifySemaphore.release()
                 streamThread?.interrupt()
-                streamThread = Thread { streamPayload(device) }.also { it.isDaemon = true; it.start() }
+                Log.d(TAG, "onDescriptorWriteRequest: spawning stream thread for ${device.address}")
+                streamThread = Thread {
+                    guarded("streamThread") { streamPayload(device) }
+                }.also { it.isDaemon = true; it.start() }
+                Log.d(TAG, "onDescriptorWriteRequest: stream thread started, id=${streamThread?.id}")
             } else if (descriptor.uuid == CCCD_UUID &&
                 value != null &&
                 value.contentEquals(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE)
@@ -262,8 +335,12 @@ class BlePeripheralModule : Module() {
                     Log.e(TAG, "openGattServer() returned null")
                     return@AsyncFunction promise.reject("ERR_GATT", "Failed to open GATT server", null)
                 }
-                gattServer?.addService(service)
-                Log.d(TAG, "GATT service registered: $SERVICE_UUID with DATA, HASH, STREAM chars")
+                val serviceAdded = gattServer?.addService(service) ?: false
+                Log.i(TAG, "GATT service addService()=$serviceAdded for $SERVICE_UUID with DATA(${DATA_CHAR_UUID}), HASH(${HASH_CHAR_UUID}), STREAM(${DATA_TC2_STREAM_UUID}) chars")
+                if (!serviceAdded) {
+                    Log.e(TAG, "addService() returned false — service was not registered")
+                    return@AsyncFunction promise.reject("ERR_GATT", "Failed to add GATT service", null)
+                }
 
                 // ── Start advertising ─────────────────────────────────────────
                 advertiser = adapter.bluetoothLeAdvertiser
@@ -311,9 +388,9 @@ class BlePeripheralModule : Module() {
                 advertiser?.startAdvertising(settings, data, scanResponse, cb)
                 // Promise resolved/rejected inside callback above.
 
-            } catch (e: Exception) {
-                Log.e(TAG, "startServer() threw: ${e.message}", e)
-                promise.reject("ERR_PERIPHERAL", e.message ?: "Unknown error", e)
+            } catch (t: Throwable) {
+                Log.e(TAG, "startServer() THREW: ${t.javaClass.name}: ${t.message}", t)
+                promise.reject("ERR_PERIPHERAL", t.message ?: "Unknown error", t)
             }
         }
 
@@ -322,9 +399,9 @@ class BlePeripheralModule : Module() {
             try {
                 stopInternal()
                 promise.resolve(null)
-            } catch (e: Exception) {
-                Log.e(TAG, "stopServer() threw: ${e.message}", e)
-                promise.reject("ERR_STOP", e.message ?: "Unknown error", e)
+            } catch (t: Throwable) {
+                Log.e(TAG, "stopServer() THREW: ${t.javaClass.name}: ${t.message}", t)
+                promise.reject("ERR_STOP", t.message ?: "Unknown error", t)
             }
         }
     }
