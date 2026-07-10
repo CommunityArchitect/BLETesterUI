@@ -50,10 +50,10 @@ index 07f0995..c6ebce8 100644
      String deviceIdentifier,
      String transactionId,
 diff --git a/android/src/main/java/com/bleplx/adapter/BleModule.java b/android/src/main/java/com/bleplx/adapter/BleModule.java
-index 44392b6..84949b1 100755
+index 44392b6..b09aedf 100755
 --- a/android/src/main/java/com/bleplx/adapter/BleModule.java
 +++ b/android/src/main/java/com/bleplx/adapter/BleModule.java
-@@ -250,6 +250,58 @@ public class BleModule extends ReactContextBaseJavaModule implements BleAdapter
+@@ -250,6 +250,48 @@ public class BleModule extends ReactContextBaseJavaModule implements BleAdapter
      pendingTransactions.replaceSubscription(transactionId, subscription);
    }
  
@@ -78,23 +78,13 @@ index 44392b6..84949b1 100755
 +      return;
 +    }
 +
-+    final com.polidea.rxandroidble2.PhyOption phyOption;
-+    switch (phyOptions) {
-+      case 1:
-+        phyOption = com.polidea.rxandroidble2.PhyOption.S2;
-+        break;
-+      case 2:
-+        phyOption = com.polidea.rxandroidble2.PhyOption.S8;
-+        break;
-+      default:
-+        phyOption = com.polidea.rxandroidble2.PhyOption.NO_PREFERRED;
-+        break;
-+    }
-+
++    // RxAndroidBle 1.17.2's setPreferredPhy takes a raw int coding-preference
++    // argument (matching android.bluetooth.BluetoothGatt.PHY_OPTION_*), not
++    // the PhyOption enum introduced in later RxAndroidBle versions.
 +    final SafeExecutor<Device> safeExecutor = new SafeExecutor<>(onSuccessCallback, onErrorCallback);
 +
 +    final Disposable subscription = connection
-+      .setPreferredPhy(txPhy, rxPhy, phyOption)
++      .setPreferredPhy(txPhy, rxPhy, phyOptions)
 +      .doOnDispose(() -> {
 +        safeExecutor.error(BleErrorUtils.cancelled());
 +        pendingTransactions.removeSubscription(transactionId);
