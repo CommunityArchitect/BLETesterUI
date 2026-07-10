@@ -90,8 +90,15 @@ class BlePeripheralModule : Module() {
     private var connectedDevice: BluetoothDevice? = null
     private var negotiatedMtu: Int = 23
     private var streamThread: Thread? = null
-    // One permit: streaming sends one chunk at a time, waiting for onNotificationSent before next.
-    private var notifySemaphore = Semaphore(1)
+    // Pipeline depth: how many notifications can be in flight (queued in the
+    // controller) before streamPayload() blocks waiting for onNotificationSent.
+    // With a permit count of 1 (stop-and-wait), throughput is capped at
+    // roughly one chunk per connection interval — at BALANCED priority
+    // (~30-50ms interval) that's only ~10-17 KB/s regardless of MTU/chunk size.
+    // Raising this lets the controller keep several notifications queued so
+    // the radio can send back-to-back within a single connection interval.
+    private val NOTIFY_PIPELINE_DEPTH = 4
+    private var notifySemaphore = Semaphore(NOTIFY_PIPELINE_DEPTH)
 
     // ── Streaming: send payloadBytes in MTU-sized chunks via NOTIFY ──────────────
     // Runs on a dedicated daemon thread. Wrapped in try/catch/finally so that any
